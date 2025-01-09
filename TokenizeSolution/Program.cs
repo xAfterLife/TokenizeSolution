@@ -237,7 +237,11 @@ public static class SolutionCompactor
 
         try
         {
+            var startTime = DateTime.UtcNow;
             CompactSolution(solutionPath, outputFile, additionalIgnoredDirectories, additionalIgnoredFiles);
+            var endTime = DateTime.UtcNow;
+            
+            Console.WriteLine($"Elapsed time: {(endTime - startTime).TotalMilliseconds} ms.");
         }
         catch (Exception ex)
         {
