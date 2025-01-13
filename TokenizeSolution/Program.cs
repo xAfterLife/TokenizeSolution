@@ -1,9 +1,10 @@
 ﻿using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 
 namespace TokenizeSolution;
 
-public static class SolutionCompactor
+public static partial class SolutionCompactor
 {
     private static readonly HashSet<string> IgnoredDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -43,43 +44,17 @@ public static class SolutionCompactor
         ".zip", ".rar", ".tar", ".gz", ".7z", // Archives
         ".exe", ".dll", ".pdb", ".so", ".dylib", ".lib", // Binaries
         ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pdf", // Office files
-        ".ttf", ".otf", ".woff", ".woff2", ".eot" // Fonts
+        ".ttf", ".otf", ".woff", ".woff2", ".eot", // Fonts
+        ".res", ".resx" // Resource Files
     };
 
-    private static void CompactSolution(string solutionPath, string outputFile,
+    private static async Task CompactSolutionAsync(string solutionPath, string outputFile,
         HashSet<string> additionalIgnoredDirectories, HashSet<string> additionalIgnoredFiles)
     {
         var sb = new StringBuilder();
-        var files = GetRelevantFiles(solutionPath, additionalIgnoredDirectories, additionalIgnoredFiles);
-        var lockObject = new object();
-        var totalFiles = files.Count;
-        var processedFiles = 0;
+        var channel = Channel.CreateUnbounded<string>();
 
-        Console.WriteLine($"Processing {totalFiles} files...");
-
-        Parallel.ForEach(files, file =>
-        {
-            var relativePath = Path.GetRelativePath(solutionPath, file);
-            var content = CompactContent(file);
-
-            lock (lockObject)
-            {
-                sb.AppendLine($"### {relativePath}");
-                sb.AppendLine(content);
-                sb.AppendLine(); // Empty line for separation
-                processedFiles++;
-                Console.WriteLine($"Processed {processedFiles}/{totalFiles} files: {relativePath}");
-            }
-        });
-
-        File.WriteAllText(outputFile, sb.ToString());
-        Console.WriteLine($"Successfully compacted solution to {outputFile}");
-    }
-
-    private static List<string> GetRelevantFiles(string directory, HashSet<string> additionalIgnoredDirectories,
-        HashSet<string> additionalIgnoredFiles)
-    {
-        var gitignoreRules = LoadGitignoreRules(directory);
+        var gitignoreRules = LoadGitignoreRules(solutionPath);
         var gitignoreRegexes = CompileGitignoreRules(gitignoreRules);
 
         var allIgnoredDirectories = new HashSet<string>(IgnoredDirectories, StringComparer.OrdinalIgnoreCase);
@@ -88,22 +63,44 @@ public static class SolutionCompactor
         var allIgnoredFiles = new HashSet<string>(IgnoredFiles, StringComparer.OrdinalIgnoreCase);
         allIgnoredFiles.UnionWith(additionalIgnoredFiles);
 
-        return Directory.GetFiles(directory, "*.*", SearchOption.AllDirectories)
-            .Where(file =>
+        // Start file discovery
+        var discoveryTask = Task.Run(() => DiscoverFiles(solutionPath, channel, allIgnoredDirectories, allIgnoredFiles, gitignoreRegexes));
+
+        // Start processing files
+        var processingTasks = Enumerable.Range(0, Environment.ProcessorCount)
+                                        .Select(_ => ProcessFilesAsync(channel, sb))
+                                        .ToArray();
+
+        await discoveryTask; // Wait for discovery to finish
+        channel.Writer.Complete(); // Signal that no more files will be written
+
+        await Task.WhenAll(processingTasks); // Wait for all processing to finish
+
+        await File.WriteAllTextAsync(outputFile, sb.ToString());
+        Console.WriteLine($"Successfully compacted solution to {outputFile}");
+    }
+
+    private static int DiscoverFiles(string directory, Channel<string> channel,
+        HashSet<string> ignoredDirectories, HashSet<string> ignoredFiles, List<Regex> gitignoreRegexes)
+    {
+        var files = Directory.GetFiles(directory, "*.*", SearchOption.AllDirectories);
+        var totalFiles = files.Length;
+
+        Parallel.ForEach(files, file =>
             {
                 var relativePath = Path.GetRelativePath(directory, file).Replace('\\', '/');
                 var fileName = Path.GetFileName(file);
                 var fileExtension = Path.GetExtension(file);
 
                 // Exclude ignored directories
-                var isInIgnoredDirectory = allIgnoredDirectories.Any(ignored =>
-                    file.Contains($"{Path.DirectorySeparatorChar}{ignored}{Path.DirectorySeparatorChar}")
-                );
+                var isInIgnoredDirectory = ignoredDirectories
+                    .Any(ignored => file.Contains($"{Path.DirectorySeparatorChar}{ignored}{Path.DirectorySeparatorChar}"));
 
                 // Exclude ignored files
-                var isIgnoredFile = allIgnoredFiles.Contains(fileName) ||
-                                    allIgnoredFiles.Any(ignored =>
-                                        ignored.StartsWith("*.") && fileName.EndsWith(ignored.Substring(1)));
+                var isIgnoredFile = ignoredFiles.Contains(fileName) ||
+                                    ignoredFiles.Any(ignored =>
+                                        ignored.StartsWith("*.") && fileName.EndsWith(ignored[1..])
+                                    );
 
                 // Exclude binary file types
                 var isBinaryFile = BinaryExtensions.Contains(fileExtension);
@@ -111,32 +108,52 @@ public static class SolutionCompactor
                 // Exclude based on .gitignore rules
                 var isIgnoredByGitignore = IsIgnoredByGitignore(relativePath, gitignoreRegexes);
 
-                return !isInIgnoredDirectory && !isIgnoredFile && !isBinaryFile && !isIgnoredByGitignore;
-            })
-            .OrderBy(file => file)
-            .ToList();
+                if ( !isInIgnoredDirectory && !isIgnoredFile && !isBinaryFile && !isIgnoredByGitignore )
+                    channel.Writer.TryWrite(file);
+            }
+        );
+
+        return totalFiles;
+    }
+
+    private static async Task ProcessFilesAsync(Channel<string> channel, StringBuilder sb)
+    {
+        await foreach ( var file in channel.Reader.ReadAllAsync() )
+        {
+            var relativePath = Path.GetRelativePath(Path.GetDirectoryName(file), file);
+            var content = CompactContent(file);
+            var outputLine = $"### {relativePath}\n{content}\n\n";
+
+            lock ( sb )
+            {
+                sb.Append(outputLine);
+                Console.WriteLine($"Processed {relativePath}");
+            }
+        }
     }
 
     private static List<string> LoadGitignoreRules(string directory)
     {
         var gitignorePath = Path.Combine(directory, ".gitignore");
-        if (!File.Exists(gitignorePath)) return [];
+        if ( !File.Exists(gitignorePath) )
+            return [];
 
         return File.ReadAllLines(gitignorePath)
-            .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
-            .ToList();
+                   .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
+                   .ToList();
     }
 
     private static List<Regex> CompileGitignoreRules(List<string> gitignoreRules)
     {
         return gitignoreRules
-            .Select(rule =>
-            {
-                var pattern = rule.StartsWith('!') ? rule[1..] : rule;
-                var regexPattern = ConvertGitignorePatternToRegex(pattern);
-                return new Regex(regexPattern, RegexOptions.Compiled);
-            })
-            .ToList();
+               .Select(rule =>
+                   {
+                       var pattern = rule.StartsWith('!') ? rule[1..] : rule;
+                       var regexPattern = ConvertGitignorePatternToRegex(pattern);
+                       return new Regex(regexPattern, RegexOptions.Compiled);
+                   }
+               )
+               .ToList();
     }
 
     private static bool IsIgnoredByGitignore(string relativePath, List<Regex> gitignoreRegexes)
@@ -149,10 +166,10 @@ public static class SolutionCompactor
         var stringBuilder = new StringBuilder();
         var isEscaping = false;
 
-        foreach (var c in pattern)
-            if (c is '*' or '/')
+        foreach ( var c in pattern )
+            if ( c is '*' or '/' )
             {
-                if (isEscaping)
+                if ( isEscaping )
                 {
                     stringBuilder.Length--;
                     isEscaping = false;
@@ -160,7 +177,7 @@ public static class SolutionCompactor
 
                 stringBuilder.Append(c);
             }
-            else if (Regex.Escape(c.ToString()).Length > 1)
+            else if ( Regex.Escape(c.ToString()).Length > 1 )
             {
                 stringBuilder.Append('\\').Append(c);
                 isEscaping = true;
@@ -174,8 +191,9 @@ public static class SolutionCompactor
         stringBuilder.Replace("**", ".*", 0, stringBuilder.Length);
         stringBuilder.Replace("*", "[^/]*", 0, stringBuilder.Length);
 
-        if (pattern.EndsWith('/')) stringBuilder.Append(".*");
-        if (pattern.StartsWith('/'))
+        if ( pattern.EndsWith('/') )
+            stringBuilder.Append(".*");
+        if ( pattern.StartsWith('/') )
         {
             stringBuilder.Insert(0, '^');
         }
@@ -190,25 +208,48 @@ public static class SolutionCompactor
 
     private static string CompactContent(string filePath)
     {
-        var lines = File.ReadLines(filePath)
-            .Select(line => line.Trim())
-            .Where(line => !string.IsNullOrWhiteSpace(line))
-            .ToList();
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+        var content = File.ReadAllText(filePath);
 
-        var isXmlOrJson = File.ReadLines(filePath).FirstOrDefault()?.TrimStart().StartsWith('<') == true ||
-                          File.ReadLines(filePath).FirstOrDefault()?.TrimStart().StartsWith('{') == true;
+        // Remove comments based on file type
+        content = extension switch
+        {
+            ".cs" => RemoveCStyleComments(content),
+            ".ts" or ".js" or ".jsx" or ".tsx" => RemoveCStyleComments(content),
+            _ => content
+        };
+
+        var lines = content.Split(["\r\n", "\r", "\n"], StringSplitOptions.None)
+                           .Select(line => line.Trim())
+                           .Where(line => !string.IsNullOrWhiteSpace(line))
+                           .ToList();
+
+        var isXmlOrJson = lines.FirstOrDefault()?.TrimStart().StartsWith('<') == true ||
+                          lines.FirstOrDefault()?.TrimStart().StartsWith('{') == true;
         return string.Join(isXmlOrJson ? "" : "\n", lines);
     }
 
-    public static void Main(string[] args)
+    private static string RemoveCStyleComments(string content)
     {
-        if (args.Length == 0 || args.Contains("--help"))
+        content = CommentRegex1().Replace(content, "");
+        content = CommentRegex2().Replace(content, "");
+        content = CommentRegex3().Replace(content, "");
+        content = CommentRegex4().Replace(content, "");
+        content = CommentRegex5().Replace(content, "");
+        content = CommentRegex6().Replace(content, "");
+
+        return content;
+    }
+
+    public static async Task Main(string[] args)
+    {
+        if ( args.Length == 0 || args.Contains("--help") )
         {
             ShowHelp();
             return;
         }
 
-        if (args.Length < 2)
+        if ( args.Length < 2 )
         {
             Console.WriteLine("Error: Invalid number of arguments.");
             ShowHelp();
@@ -222,8 +263,8 @@ public static class SolutionCompactor
         var additionalIgnoredDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var additionalIgnoredFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        for (var i = 2; i < args.Length; i++)
-            switch (args[i])
+        for ( var i = 2; i < args.Length; i++ )
+            switch ( args[i] )
             {
                 case "--ignore-dir" when i + 1 < args.Length:
                     additionalIgnoredDirectories.Add(args[i + 1]);
@@ -238,12 +279,12 @@ public static class SolutionCompactor
         try
         {
             var startTime = DateTime.UtcNow;
-            CompactSolution(solutionPath, outputFile, additionalIgnoredDirectories, additionalIgnoredFiles);
+            await CompactSolutionAsync(solutionPath, outputFile, additionalIgnoredDirectories, additionalIgnoredFiles);
             var endTime = DateTime.UtcNow;
-            
+
             Console.WriteLine($"Elapsed time: {(endTime - startTime).TotalMilliseconds} ms.");
         }
-        catch (Exception ex)
+        catch ( Exception ex )
         {
             Console.WriteLine($"Error: {ex.Message}");
         }
@@ -251,7 +292,7 @@ public static class SolutionCompactor
 
     private static void ShowHelp()
     {
-        Console.WriteLine("Usage: SolutionCompactor <solution-path> <output-file> [options]");
+        Console.WriteLine("Usage: TokenizeSolution <solution-path> <output-file> [options]");
         Console.WriteLine();
         Console.WriteLine("Options:");
         Console.WriteLine("  --ignore-dir <directory>    Add an additional directory to ignore");
@@ -259,6 +300,24 @@ public static class SolutionCompactor
         Console.WriteLine("  --help                      Show this help message");
         Console.WriteLine();
         Console.WriteLine("Example:");
-        Console.WriteLine("  SolutionCompactor ./MyProject ./output.txt --ignore-dir custom-bin --ignore-file *.tmp");
+        Console.WriteLine("  TokenizeSolution ./MyProject ./output.txt --ignore-dir custom-bin --ignore-file *.tmp");
     }
+
+    [GeneratedRegex(@"/\*[\s\S]*?\*/", RegexOptions.Compiled)]
+    private static partial Regex CommentRegex1();
+
+    [GeneratedRegex(@"(?<!:)//(?!/).*$", RegexOptions.Multiline | RegexOptions.Compiled)]
+    private static partial Regex CommentRegex2();
+
+    [GeneratedRegex(@"///.*$", RegexOptions.Multiline | RegexOptions.Compiled)]
+    private static partial Regex CommentRegex3();
+
+    [GeneratedRegex(@"^\s*//\s*$\n?", RegexOptions.Multiline | RegexOptions.Compiled)]
+    private static partial Regex CommentRegex4();
+
+    [GeneratedRegex(@"^\s*#(region|endregion)\s*$\n?", RegexOptions.Multiline | RegexOptions.Compiled)]
+    private static partial Regex CommentRegex5();
+
+    [GeneratedRegex(@"^\s*$\n", RegexOptions.Multiline | RegexOptions.Compiled)]
+    private static partial Regex CommentRegex6();
 }
