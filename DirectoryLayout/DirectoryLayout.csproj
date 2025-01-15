@@ -12,12 +12,4 @@
         <LangVersion>latest</LangVersion>
     </PropertyGroup>
 
-    <ItemGroup>
-        <RuntimeHostConfigurationOption Include="System.Globalization.Invariant" Value="true"/>
-    </ItemGroup>
-
-    <ItemGroup>
-      <PackageReference Include="CommunityToolkit.HighPerformance" Version="8.4.0" />
-    </ItemGroup>
-
 </Project>
