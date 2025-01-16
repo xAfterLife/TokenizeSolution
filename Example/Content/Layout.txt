@@ -1,0 +1,12 @@
+Project Structure:
+📁 Example/
+📁 src/
+  📁 DirectoryLayout/
+    🔧 [Project] DirectoryLayout.csproj
+    📄 [C#] Program.cs
+  📁 TokenizeSolution/
+    📄 [C#] Program.cs
+    🔧 [Project] TokenizeSolution.csproj
+  🏗️ [Solution] TokenizeSolution.sln
+  📋 [JSON] global.json
+📝 [Markdown] README.md
