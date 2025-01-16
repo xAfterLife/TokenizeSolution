@@ -1,11 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
-using System.Threading.Tasks;
 
 namespace TokenizeSolution;
 
@@ -70,12 +65,13 @@ public static partial class SolutionCompactor
 
         // Start file discovery
         var discoveryTask = Task.Run(() =>
-            DiscoverFiles(solutionPath, channel, allIgnoredDirectories, allIgnoredFiles, gitignoreRegexes));
+            DiscoverFiles(solutionPath, channel, allIgnoredDirectories, allIgnoredFiles, gitignoreRegexes)
+        );
 
         // Start processing files
         var processingTasks = Enumerable.Range(0, Environment.ProcessorCount)
-            .Select(_ => ProcessFilesAsync(channel, sb))
-            .ToArray();
+                                        .Select(_ => ProcessFilesAsync(channel, sb))
+                                        .ToArray();
 
         await discoveryTask; // Wait for discovery to finish
         channel.Writer.Complete(); // Signal that no more files will be written
@@ -101,7 +97,8 @@ public static partial class SolutionCompactor
                 // Exclude ignored directories
                 var isInIgnoredDirectory = ignoredDirectories
                     .Any(ignored =>
-                        file.Contains($"{Path.DirectorySeparatorChar}{ignored}{Path.DirectorySeparatorChar}"));
+                        file.Contains($"{Path.DirectorySeparatorChar}{ignored}{Path.DirectorySeparatorChar}")
+                    );
 
                 // Exclude ignored files
                 var isIgnoredFile = ignoredFiles.Contains(fileName) ||
@@ -115,7 +112,7 @@ public static partial class SolutionCompactor
                 // Exclude based on .gitignore rules
                 var isIgnoredByGitignore = IsIgnoredByGitignore(relativePath, gitignoreRegexes);
 
-                if (!isInIgnoredDirectory && !isIgnoredFile && !isBinaryFile && !isIgnoredByGitignore)
+                if ( !isInIgnoredDirectory && !isIgnoredFile && !isBinaryFile && !isIgnoredByGitignore )
                     channel.Writer.TryWrite(file);
             }
         );
@@ -125,13 +122,16 @@ public static partial class SolutionCompactor
 
     private static async Task ProcessFilesAsync(Channel<string> channel, StringBuilder sb)
     {
-        await foreach (var file in channel.Reader.ReadAllAsync())
+        await foreach ( var file in channel.Reader.ReadAllAsync() )
         {
-            var relativePath = Path.GetRelativePath(Path.GetDirectoryName(file), file);
+            var directory = Path.GetDirectoryName(file);
+            if ( directory == null )
+                continue;
+            var relativePath = Path.GetRelativePath(directory, file);
             var content = CompactContent(file);
             var outputLine = $"### {relativePath}\n{content}\n\n";
 
-            lock (sb)
+            lock ( sb )
             {
                 sb.Append(outputLine);
                 Console.WriteLine($"Processed {relativePath}");
@@ -142,25 +142,25 @@ public static partial class SolutionCompactor
     private static List<string> LoadGitignoreRules(string directory)
     {
         var gitignorePath = Path.Combine(directory, ".gitignore");
-        if (!File.Exists(gitignorePath))
+        if ( !File.Exists(gitignorePath) )
             return [];
 
         return File.ReadAllLines(gitignorePath)
-            .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
-            .ToList();
+                   .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
+                   .ToList();
     }
 
     private static List<Regex> CompileGitignoreRules(List<string> gitignoreRules)
     {
         return gitignoreRules
-            .Select(rule =>
-                {
-                    var pattern = rule.StartsWith('!') ? rule[1..] : rule;
-                    var regexPattern = ConvertGitignorePatternToRegex(pattern);
-                    return new Regex(regexPattern, RegexOptions.Compiled);
-                }
-            )
-            .ToList();
+               .Select(rule =>
+                   {
+                       var pattern = rule.StartsWith('!') ? rule[1..] : rule;
+                       var regexPattern = ConvertGitignorePatternToRegex(pattern);
+                       return new Regex(regexPattern, RegexOptions.Compiled);
+                   }
+               )
+               .ToList();
     }
 
     private static bool IsIgnoredByGitignore(string relativePath, List<Regex> gitignoreRegexes)
@@ -173,10 +173,10 @@ public static partial class SolutionCompactor
         var stringBuilder = new StringBuilder();
         var isEscaping = false;
 
-        foreach (var c in pattern)
-            if (c is '*' or '/')
+        foreach ( var c in pattern )
+            if ( c is '*' or '/' )
             {
-                if (isEscaping)
+                if ( isEscaping )
                 {
                     stringBuilder.Length--;
                     isEscaping = false;
@@ -184,7 +184,7 @@ public static partial class SolutionCompactor
 
                 stringBuilder.Append(c);
             }
-            else if (Regex.Escape(c.ToString()).Length > 1)
+            else if ( Regex.Escape(c.ToString()).Length > 1 )
             {
                 stringBuilder.Append('\\').Append(c);
                 isEscaping = true;
@@ -198,9 +198,9 @@ public static partial class SolutionCompactor
         stringBuilder.Replace("**", ".*", 0, stringBuilder.Length);
         stringBuilder.Replace("*", "[^/]*", 0, stringBuilder.Length);
 
-        if (pattern.EndsWith('/'))
+        if ( pattern.EndsWith('/') )
             stringBuilder.Append(".*");
-        if (pattern.StartsWith('/'))
+        if ( pattern.StartsWith('/') )
         {
             stringBuilder.Insert(0, '^');
         }
@@ -227,9 +227,9 @@ public static partial class SolutionCompactor
         };
 
         var lines = content.Split(["\r\n", "\r", "\n"], StringSplitOptions.None)
-            .Select(line => line.Trim())
-            .Where(line => !string.IsNullOrWhiteSpace(line))
-            .ToList();
+                           .Select(line => line.Trim())
+                           .Where(line => !string.IsNullOrWhiteSpace(line))
+                           .ToList();
 
         var isXmlOrJson = lines.FirstOrDefault()?.TrimStart().StartsWith('<') == true ||
                           lines.FirstOrDefault()?.TrimStart().StartsWith('{') == true;
@@ -250,13 +250,13 @@ public static partial class SolutionCompactor
 
     public static async Task Main(string[] args)
     {
-        if (args.Length == 0 || args.Contains("--help"))
+        if ( args.Length == 0 || args.Contains("--help") )
         {
             ShowHelp();
             return;
         }
 
-        if (args.Length < 2)
+        if ( args.Length < 2 )
         {
             Console.WriteLine("Error: Invalid number of arguments.");
             ShowHelp();
@@ -270,8 +270,8 @@ public static partial class SolutionCompactor
         var additionalIgnoredDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var additionalIgnoredFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        for (var i = 2; i < args.Length; i++)
-            switch (args[i])
+        for ( var i = 2; i < args.Length; i++ )
+            switch ( args[i] )
             {
                 case "--ignore-dir" when i + 1 < args.Length:
                     additionalIgnoredDirectories.Add(args[i + 1]);
@@ -291,7 +291,7 @@ public static partial class SolutionCompactor
 
             Console.WriteLine($"Elapsed time: {(endTime - startTime).TotalMilliseconds} ms.");
         }
-        catch (Exception ex)
+        catch ( Exception ex )
         {
             Console.WriteLine($"Error: {ex.Message}");
         }
@@ -313,10 +313,10 @@ public static partial class SolutionCompactor
     [GeneratedRegex(@"/\*[\s\S]*?\*/", RegexOptions.Compiled)]
     private static partial Regex CommentRegex1();
 
-    [GeneratedRegex(@"(?<!:)//(?!/).*$", RegexOptions.Multiline | RegexOptions.Compiled)]
+    [GeneratedRegex("(?<!:)//(?!/).*$", RegexOptions.Multiline | RegexOptions.Compiled)]
     private static partial Regex CommentRegex2();
 
-    [GeneratedRegex(@"///.*$", RegexOptions.Multiline | RegexOptions.Compiled)]
+    [GeneratedRegex("///.*$", RegexOptions.Multiline | RegexOptions.Compiled)]
     private static partial Regex CommentRegex3();
 
     [GeneratedRegex(@"^\s*//\s*$\n?", RegexOptions.Multiline | RegexOptions.Compiled)]

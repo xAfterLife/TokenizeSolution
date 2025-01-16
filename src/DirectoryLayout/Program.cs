@@ -1,7 +1,7 @@
 ﻿using System.Text;
 using System.Text.RegularExpressions;
 
-namespace DirectoryLayout;
+namespace TokenizeSolution;
 
 public static class Program
 {
@@ -49,13 +49,13 @@ public static class Program
 
     public static async Task Main(string[] args)
     {
-        if (args.Length == 0 || args.Contains("--help"))
+        if ( args.Length == 0 || args.Contains("--help") )
         {
             ShowHelp();
             return;
         }
 
-        if (args.Length < 2)
+        if ( args.Length < 2 )
         {
             Console.WriteLine("Error: Invalid number of arguments.");
             ShowHelp();
@@ -69,9 +69,8 @@ public static class Program
         var additionalIgnoredDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var additionalIgnoredFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        for (var i = 2; i < args.Length; i++)
-        {
-            switch (args[i])
+        for ( var i = 2; i < args.Length; i++ )
+            switch ( args[i] )
             {
                 case "--ignore-dir" when i + 1 < args.Length:
                     additionalIgnoredDirectories.Add(args[i + 1]);
@@ -82,7 +81,6 @@ public static class Program
                     i++;
                     break;
             }
-        }
 
         try
         {
@@ -92,7 +90,7 @@ public static class Program
 
             Console.WriteLine($"Elapsed time: {(endTime - startTime).TotalMilliseconds} ms.");
         }
-        catch (Exception ex)
+        catch ( Exception ex )
         {
             Console.WriteLine($"Error: {ex.Message}");
         }
@@ -113,14 +111,14 @@ public static class Program
 
         sb.AppendLine("Project Structure:");
         await GenerateDirectoryLayoutAsync(solutionPath, solutionPath, "", sb, allIgnoredDirectories, allIgnoredFiles,
-            gitignoreRegexes);
+            gitignoreRegexes
+        );
 
         await File.WriteAllTextAsync(outputFile, sb.ToString());
         Console.WriteLine($"Successfully generated directory layout to {outputFile}");
     }
 
-    private static async Task GenerateDirectoryLayoutAsync(
-        string basePath,
+    private static async Task GenerateDirectoryLayoutAsync(string basePath,
         string currentPath,
         string indent,
         StringBuilder sb,
@@ -131,31 +129,32 @@ public static class Program
         var directories = Directory.GetDirectories(currentPath);
         var files = Directory.GetFiles(currentPath);
 
-        foreach (var dir in directories.OrderBy(d => d))
+        foreach ( var dir in directories.OrderBy(d => d) )
         {
             var dirName = Path.GetFileName(dir);
             var relativePath = Path.GetRelativePath(basePath, dir).Replace('\\', '/');
 
-            if (ignoredDirectories.Contains(dirName) ||
-                IsIgnoredByGitignore(relativePath, gitignoreRegexes))
+            if ( ignoredDirectories.Contains(dirName) ||
+                 IsIgnoredByGitignore(relativePath, gitignoreRegexes) )
                 continue;
 
             sb.AppendLine($"{indent}📁 {dirName}/");
             await GenerateDirectoryLayoutAsync(
                 basePath, dir, indent + "  ", sb,
-                ignoredDirectories, ignoredFiles, gitignoreRegexes);
+                ignoredDirectories, ignoredFiles, gitignoreRegexes
+            );
         }
 
-        foreach (var file in files.OrderBy(f => f))
+        foreach ( var file in files.OrderBy(f => f) )
         {
             var fileName = Path.GetFileName(file);
             var fileExtension = Path.GetExtension(file);
             var relativePath = Path.GetRelativePath(basePath, file).Replace('\\', '/');
 
-            if (ignoredFiles.Contains(fileName) ||
-                ignoredFiles.Any(ignored => ignored.StartsWith("*.") && fileName.EndsWith(ignored[1..])) ||
-                BinaryExtensions.Contains(fileExtension) ||
-                IsIgnoredByGitignore(relativePath, gitignoreRegexes))
+            if ( ignoredFiles.Contains(fileName) ||
+                 ignoredFiles.Any(ignored => ignored.StartsWith("*.") && fileName.EndsWith(ignored[1..])) ||
+                 BinaryExtensions.Contains(fileExtension) ||
+                 IsIgnoredByGitignore(relativePath, gitignoreRegexes) )
                 continue;
 
             var fileIcon = GetFileIcon(fileExtension);
@@ -166,24 +165,25 @@ public static class Program
     private static List<string> LoadGitignoreRules(string directory)
     {
         var gitignorePath = Path.Combine(directory, ".gitignore");
-        if (!File.Exists(gitignorePath))
+        if ( !File.Exists(gitignorePath) )
             return [];
 
         return File.ReadAllLines(gitignorePath)
-            .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
-            .ToList();
+                   .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
+                   .ToList();
     }
 
     private static List<Regex> CompileGitignoreRules(List<string> gitignoreRules)
     {
         return gitignoreRules
-            .Select(rule =>
-            {
-                var pattern = rule.StartsWith('!') ? rule[1..] : rule;
-                var regexPattern = ConvertGitignorePatternToRegex(pattern);
-                return new Regex(regexPattern, RegexOptions.Compiled);
-            })
-            .ToList();
+               .Select(rule =>
+                   {
+                       var pattern = rule.StartsWith('!') ? rule[1..] : rule;
+                       var regexPattern = ConvertGitignorePatternToRegex(pattern);
+                       return new Regex(regexPattern, RegexOptions.Compiled);
+                   }
+               )
+               .ToList();
     }
 
     private static bool IsIgnoredByGitignore(string relativePath, List<Regex> gitignoreRegexes)
@@ -196,11 +196,10 @@ public static class Program
         var stringBuilder = new StringBuilder();
         var isEscaping = false;
 
-        foreach (var c in pattern)
-        {
-            if (c is '*' or '/')
+        foreach ( var c in pattern )
+            if ( c is '*' or '/' )
             {
-                if (isEscaping)
+                if ( isEscaping )
                 {
                     stringBuilder.Length--;
                     isEscaping = false;
@@ -208,7 +207,7 @@ public static class Program
 
                 stringBuilder.Append(c);
             }
-            else if (Regex.Escape(c.ToString()).Length > 1)
+            else if ( Regex.Escape(c.ToString()).Length > 1 )
             {
                 stringBuilder.Append('\\').Append(c);
                 isEscaping = true;
@@ -218,14 +217,13 @@ public static class Program
                 stringBuilder.Append(c);
                 isEscaping = false;
             }
-        }
 
         stringBuilder.Replace("**", ".*", 0, stringBuilder.Length);
         stringBuilder.Replace("*", "[^/]*", 0, stringBuilder.Length);
 
-        if (pattern.EndsWith('/'))
+        if ( pattern.EndsWith('/') )
             stringBuilder.Append(".*");
-        if (pattern.StartsWith('/'))
+        if ( pattern.StartsWith('/') )
         {
             stringBuilder.Insert(0, '^');
         }
@@ -243,6 +241,8 @@ public static class Program
         return extension.ToLowerInvariant() switch
         {
             ".cs" => "📄 [C#]",
+            ".h" => "📄 [C-Header]",
+            ".cpp" => "📄 [C-Source]",
             ".csproj" => "🔧 [Project]",
             ".sln" => "🏗️ [Solution]",
             ".json" => "📋 [JSON]",
@@ -254,6 +254,7 @@ public static class Program
             ".js" or ".jsx" => "📄 [JS]",
             ".ts" or ".tsx" => "📄 [TS]",
             ".css" => "🎨 [CSS]",
+            ".scss" => "🎨 [SCSS]",
             ".html" => "🌐 [HTML]",
             _ => "📄"
         };
