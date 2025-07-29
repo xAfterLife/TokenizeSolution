@@ -2,14 +2,25 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net9.0</TargetFramework>
+        <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <RootNamespace>TokenizeSolution</RootNamespace>
+        <LangVersion>preview</LangVersion>
+
+        <!-- AOT Configuration -->
         <PublishAot>true</PublishAot>
         <InvariantGlobalization>true</InvariantGlobalization>
+        <StripSymbols>true</StripSymbols>
+
+        <!-- Trimming Configuration -->
+        <PublishTrimmed>true</PublishTrimmed>
+        <TrimMode>full</TrimMode>
+
+        <!-- Performance Optimizations -->
+        <OptimizationPreference>Speed</OptimizationPreference>
         <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
-        <RootNamespace>TokenizeSolution</RootNamespace>
-        <LangVersion>latest</LangVersion>
+        <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
     </PropertyGroup>
 
     <ItemGroup>
@@ -17,7 +28,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="CommunityToolkit.HighPerformance" Version="8.4.0" />
+        <PackageReference Include="CommunityToolkit.HighPerformance" Version="8.4.0"/>
     </ItemGroup>
 
 </Project>

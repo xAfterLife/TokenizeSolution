@@ -26,6 +26,22 @@ public static partial class SolutionCompactor
         "*.userprefs", "*.sln.cache", "*.suo", "*.lock"
     };
 
+    private static readonly HashSet<string> BlazorIgnoredDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Blazor WebAssembly specific
+        "wwwroot/lib", "wwwroot/_framework", "wwwroot/_content",
+        // Generated/compiled assets
+        "dist", "build", "out", "publish",
+        // CSS/JS tooling
+        "sass-cache", ".sass-cache", "css", "js/lib", "js/libs", "js/vendor",
+        // Package management
+        "packages", "package", "nuget", ".nuget",
+        // Build artifacts
+        "clientbin", "generatedassets", "_bin_deployableassemblies",
+        // Development tools
+        "launchsettings", ".launchsettings"
+    };
+
     private static readonly HashSet<string> IgnoredFiles = new(StringComparer.OrdinalIgnoreCase)
     {
         // Common files to ignore
@@ -33,6 +49,25 @@ public static partial class SolutionCompactor
         ".npmrc", ".yarnrc", ".editorconfig", ".eslintrc", ".prettierrc",
         "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
         "*.tmp", "*.bak", "*.swp", "*.swo", "*.log", "*.pid", "*.seed", "*.pid.lock"
+    };
+
+    private static readonly HashSet<string> BlazorIgnoredFiles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Blazor specific generated files
+        "*.min.css", "*.min.js", "*.bundle.js", "*.bundle.css",
+        "blazor.boot.json", "blazor.webassembly.js", "dotnet.js", "dotnet.wasm",
+        // Build and package files
+        "*.nupkg", "*.snupkg", "*.symbols.nupkg",
+        "*.nuspec", "packages.config", "packages.lock.json",
+        // CSS/JS build artifacts
+        "*.compiled.css", "*.generated.css", "*.scss.css", "*.less.css",
+        "webpack.config.js", "rollup.config.js", "vite.config.js",
+        "tsconfig.json", "jsconfig.json",
+        // Launch and debug files
+        "launchSettings.json", "*.pubxml", "*.pubxml.user",
+        // Compiled output
+        "*.dll.config", "*.exe.config", "*.runtimeconfig.json",
+        "*.deps.json", "*.pdb", "*.xml", "*.resources"
     };
 
     private static readonly HashSet<string> BinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -45,8 +80,27 @@ public static partial class SolutionCompactor
         ".exe", ".dll", ".pdb", ".so", ".dylib", ".lib", // Binaries
         ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pdf", // Office files
         ".ttf", ".otf", ".woff", ".woff2", ".eot", // Fonts
-        ".res", ".resx" // Resource Files
+        ".res", ".resx", // Resource Files
+        // Blazor/Web specific binaries
+        ".wasm", ".blat", ".dat", ".br" // WebAssembly and compressed files
     };
+
+    private static readonly HashSet<string> BlazorRelevantExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Source code files
+        ".cs", ".razor", ".cshtml",
+        // Configuration and project files
+        ".csproj", ".sln", ".props", ".targets",
+        // Application configuration
+        ".json", ".xml", ".yaml", ".yml",
+        // Web files (only unminified)
+        ".css", ".js", ".html", ".htm",
+        // Documentation
+        ".md", ".txt", ".rst"
+    };
+
+    private static readonly Regex BlazorMinifiedFileRegex = MinifiedFileRegex();
+    private static readonly Regex BlazorGeneratedFileRegex = GeneratedFileRegex();
 
     private static async Task CompactSolutionAsync(string solutionPath, string outputFile,
         HashSet<string> additionalIgnoredDirectories, HashSet<string> additionalIgnoredFiles)
@@ -54,18 +108,26 @@ public static partial class SolutionCompactor
         var sb = new StringBuilder();
         var channel = Channel.CreateUnbounded<string>();
 
+        var isBlazorProject = DetectBlazorProject(solutionPath);
         var gitignoreRules = LoadGitignoreRules(solutionPath);
         var gitignoreRegexes = CompileGitignoreRules(gitignoreRules);
 
         var allIgnoredDirectories = new HashSet<string>(IgnoredDirectories, StringComparer.OrdinalIgnoreCase);
-        allIgnoredDirectories.UnionWith(additionalIgnoredDirectories);
-
         var allIgnoredFiles = new HashSet<string>(IgnoredFiles, StringComparer.OrdinalIgnoreCase);
+
+        if ( isBlazorProject )
+        {
+            Console.WriteLine("Blazor project detected - applying Blazor-specific filtering rules");
+            allIgnoredDirectories.UnionWith(BlazorIgnoredDirectories);
+            allIgnoredFiles.UnionWith(BlazorIgnoredFiles);
+        }
+
+        allIgnoredDirectories.UnionWith(additionalIgnoredDirectories);
         allIgnoredFiles.UnionWith(additionalIgnoredFiles);
 
         // Start file discovery
         var discoveryTask = Task.Run(() =>
-            DiscoverFiles(solutionPath, channel, allIgnoredDirectories, allIgnoredFiles, gitignoreRegexes)
+            DiscoverFiles(solutionPath, channel, allIgnoredDirectories, allIgnoredFiles, gitignoreRegexes, isBlazorProject)
         );
 
         // Start processing files
@@ -82,8 +144,48 @@ public static partial class SolutionCompactor
         Console.WriteLine($"Successfully compacted solution to {outputFile}");
     }
 
+    private static bool DetectBlazorProject(string solutionPath)
+    {
+        // Check for Blazor project indicators
+        var projectFiles = Directory.GetFiles(solutionPath, "*.csproj", SearchOption.AllDirectories);
+
+        foreach ( var projectFile in projectFiles )
+        {
+            try
+            {
+                var content = File.ReadAllText(projectFile);
+                if ( content.Contains("Microsoft.AspNetCore.Components") ||
+                     content.Contains("Microsoft.AspNetCore.Components.WebAssembly") ||
+                     content.Contains("Blazor") ||
+                     content.Contains("<Project Sdk=\"Microsoft.NET.Sdk.BlazorWebAssembly\">") ||
+                     content.Contains("<Project Sdk=\"Microsoft.NET.Sdk.Web\">") )
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Ignore file read errors and continue checking
+            }
+        }
+
+        // Check for common Blazor files
+        var blazorIndicators = new[]
+        {
+            "_Imports.razor",
+            "App.razor",
+            "MainLayout.razor",
+            "wwwroot/index.html"
+        };
+
+        return blazorIndicators.Any(indicator =>
+            Directory.GetFiles(solutionPath, indicator, SearchOption.AllDirectories).Length > 0
+        );
+    }
+
     private static int DiscoverFiles(string directory, Channel<string> channel,
-        HashSet<string> ignoredDirectories, HashSet<string> ignoredFiles, List<Regex> gitignoreRegexes)
+        HashSet<string> ignoredDirectories, HashSet<string> ignoredFiles,
+        List<Regex> gitignoreRegexes, bool isBlazorProject)
     {
         var files = Directory.GetFiles(directory, "*.*", SearchOption.AllDirectories);
         var totalFiles = files.Length;
@@ -97,13 +199,14 @@ public static partial class SolutionCompactor
                 // Exclude ignored directories
                 var isInIgnoredDirectory = ignoredDirectories
                     .Any(ignored =>
-                        file.Contains($"{Path.DirectorySeparatorChar}{ignored}{Path.DirectorySeparatorChar}")
+                        file.Contains($"{Path.DirectorySeparatorChar}{ignored}{Path.DirectorySeparatorChar}") ||
+                        relativePath.StartsWith($"{ignored}/", StringComparison.OrdinalIgnoreCase)
                     );
 
                 // Exclude ignored files
                 var isIgnoredFile = ignoredFiles.Contains(fileName) ||
                                     ignoredFiles.Any(ignored =>
-                                        ignored.StartsWith("*.") && fileName.EndsWith(ignored[1..])
+                                        ignored.StartsWith("*.") && fileName.EndsWith(ignored[1..], StringComparison.OrdinalIgnoreCase)
                                     );
 
                 // Exclude binary file types
@@ -112,7 +215,18 @@ public static partial class SolutionCompactor
                 // Exclude based on .gitignore rules
                 var isIgnoredByGitignore = IsIgnoredByGitignore(relativePath, gitignoreRegexes);
 
-                if ( !isInIgnoredDirectory && !isIgnoredFile && !isBinaryFile && !isIgnoredByGitignore )
+                // Blazor-specific filtering
+                var isBlazorExcluded = false;
+                if ( isBlazorProject )
+                {
+                    isBlazorExcluded = IsBlazorSpecificExclusion(relativePath, fileName, fileExtension);
+                }
+
+                if ( !isInIgnoredDirectory &&
+                     !isIgnoredFile &&
+                     !isBinaryFile &&
+                     !isIgnoredByGitignore &&
+                     !isBlazorExcluded )
                     channel.Writer.TryWrite(file);
             }
         );
@@ -120,21 +234,76 @@ public static partial class SolutionCompactor
         return totalFiles;
     }
 
+    private static bool IsBlazorSpecificExclusion(string relativePath, string fileName, string fileExtension)
+    {
+        // Skip minified files
+        if ( BlazorMinifiedFileRegex.IsMatch(fileName) )
+            return true;
+
+        // Skip generated files
+        if ( BlazorGeneratedFileRegex.IsMatch(fileName) )
+            return true;
+
+        // Skip files in wwwroot that are not relevant source files
+        if ( relativePath.StartsWith("wwwroot/", StringComparison.OrdinalIgnoreCase) )
+        {
+            // Allow only specific files in wwwroot that might be relevant
+            var allowedWwwrootFiles = new[] { ".html", ".css", ".js" };
+            if ( !allowedWwwrootFiles.Contains(fileExtension, StringComparer.OrdinalIgnoreCase) )
+                return true;
+
+            // But still exclude minified versions
+            if ( fileName.Contains(".min.", StringComparison.OrdinalIgnoreCase) )
+                return true;
+        }
+
+        // For Blazor projects, only include files with relevant extensions
+        if ( !BlazorRelevantExtensions.Contains(fileExtension) )
+            return true;
+
+        // Skip specific patterns
+        var excludePatterns = new[]
+        {
+            "/publish/",
+            "/dist/",
+            "/build/",
+            "/.vs/",
+            "/bin/",
+            "/obj/"
+        };
+
+        return excludePatterns.Any(pattern =>
+            relativePath.Contains(pattern, StringComparison.OrdinalIgnoreCase)
+        );
+    }
+
     private static async Task ProcessFilesAsync(Channel<string> channel, StringBuilder sb)
     {
         await foreach ( var file in channel.Reader.ReadAllAsync() )
         {
-            var directory = Path.GetDirectoryName(file);
-            if ( directory == null )
-                continue;
-            var relativePath = Path.GetRelativePath(directory, file);
-            var content = CompactContent(file);
-            var outputLine = $"### {relativePath}\n{content}\n\n";
-
-            lock ( sb )
+            try
             {
-                sb.Append(outputLine);
-                Console.WriteLine($"Processed {relativePath}");
+                var directory = Path.GetDirectoryName(file);
+                if ( directory == null )
+                    continue;
+
+                var relativePath = Path.GetRelativePath(directory, file);
+                var content = CompactContent(file);
+
+                if ( string.IsNullOrWhiteSpace(content) )
+                    continue;
+
+                var outputLine = $"### {relativePath}\n{content}\n\n";
+
+                lock ( sb )
+                {
+                    sb.Append(outputLine);
+                    Console.WriteLine($"Processed {relativePath}");
+                }
+            }
+            catch ( Exception ex )
+            {
+                Console.WriteLine($"Warning: Failed to process file {file}: {ex.Message}");
             }
         }
     }
@@ -222,7 +391,9 @@ public static partial class SolutionCompactor
         content = extension switch
         {
             ".cs" => RemoveCStyleComments(content),
+            ".razor" => RemoveRazorComments(content),
             ".ts" or ".js" or ".jsx" or ".tsx" => RemoveCStyleComments(content),
+            ".css" => RemoveCssComments(content),
             _ => content
         };
 
@@ -246,6 +417,20 @@ public static partial class SolutionCompactor
         content = CommentRegex6().Replace(content, "");
 
         return content;
+    }
+
+    private static string RemoveRazorComments(string content)
+    {
+        // Remove Razor comments @* ... *@
+        content = RazorCommentRegex().Replace(content, "");
+        // Also remove C# style comments within Razor
+        return RemoveCStyleComments(content);
+    }
+
+    private static string RemoveCssComments(string content)
+    {
+        // Remove CSS comments /* ... */
+        return CssCommentRegex().Replace(content, "");
     }
 
     public static async Task Main(string[] args)
@@ -290,6 +475,7 @@ public static partial class SolutionCompactor
             var endTime = DateTime.UtcNow;
 
             Console.WriteLine($"Elapsed time: {(endTime - startTime).TotalMilliseconds} ms.");
+            await Task.Delay(1000);
         }
         catch ( Exception ex )
         {
@@ -306,8 +492,14 @@ public static partial class SolutionCompactor
         Console.WriteLine("  --ignore-file <file>        Add an additional file to ignore");
         Console.WriteLine("  --help                      Show this help message");
         Console.WriteLine();
+        Console.WriteLine("Features:");
+        Console.WriteLine("  - Automatically detects Blazor projects");
+        Console.WriteLine("  - Filters out minified, compiled, and generated files");
+        Console.WriteLine("  - Respects .gitignore rules");
+        Console.WriteLine("  - Removes comments from source files");
+        Console.WriteLine();
         Console.WriteLine("Example:");
-        Console.WriteLine("  TokenizeSolution ./MyProject ./output.txt --ignore-dir custom-bin --ignore-file *.tmp");
+        Console.WriteLine("  TokenizeSolution ./MyBlazorProject ./output.txt --ignore-dir custom-bin --ignore-file *.tmp");
     }
 
     [GeneratedRegex(@"/\*[\s\S]*?\*/", RegexOptions.Compiled)]
@@ -327,4 +519,16 @@ public static partial class SolutionCompactor
 
     [GeneratedRegex(@"^\s*$\n", RegexOptions.Multiline | RegexOptions.Compiled)]
     private static partial Regex CommentRegex6();
+
+    [GeneratedRegex(@"@\*[\s\S]*?\*@", RegexOptions.Compiled)]
+    private static partial Regex RazorCommentRegex();
+
+    [GeneratedRegex(@"/\*[\s\S]*?\*/", RegexOptions.Compiled)]
+    private static partial Regex CssCommentRegex();
+
+    [GeneratedRegex(@".*\.min\.(js|css|html)$", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    private static partial Regex MinifiedFileRegex();
+
+    [GeneratedRegex(@".*\.(generated|g|designer)\.(cs|js|css)$", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    private static partial Regex GeneratedFileRegex();
 }
