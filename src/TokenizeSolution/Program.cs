@@ -6,6 +6,8 @@ namespace TokenizeSolution;
 
 public static partial class SolutionCompactor
 {
+    private const string FileDelimiter = "\x1E"; // ASCII Record Separator
+
     private static readonly HashSet<string> IgnoredDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
         // Common build and IDE directories
@@ -105,16 +107,13 @@ public static partial class SolutionCompactor
     private static async Task CompactSolutionAsync(string solutionPath, string outputFile,
         HashSet<string> additionalIgnoredDirectories, HashSet<string> additionalIgnoredFiles)
     {
-        var sb = new StringBuilder();
         var channel = Channel.CreateUnbounded<string>();
-
         var isBlazorProject = DetectBlazorProject(solutionPath);
         var gitignoreRules = LoadGitignoreRules(solutionPath);
         var gitignoreRegexes = CompileGitignoreRules(gitignoreRules);
 
         var allIgnoredDirectories = new HashSet<string>(IgnoredDirectories, StringComparer.OrdinalIgnoreCase);
         var allIgnoredFiles = new HashSet<string>(IgnoredFiles, StringComparer.OrdinalIgnoreCase);
-
         if ( isBlazorProject )
         {
             Console.WriteLine("Blazor project detected - applying Blazor-specific filtering rules");
@@ -125,62 +124,150 @@ public static partial class SolutionCompactor
         allIgnoredDirectories.UnionWith(additionalIgnoredDirectories);
         allIgnoredFiles.UnionWith(additionalIgnoredFiles);
 
-        // Start file discovery
+        var memoryStream = new MemoryStream();
+        var writer = new StreamWriter(memoryStream, Encoding.UTF8, leaveOpen: true);
+
         var discoveryTask = Task.Run(() =>
             DiscoverFiles(solutionPath, channel, allIgnoredDirectories, allIgnoredFiles, gitignoreRegexes, isBlazorProject)
         );
 
-        // Start processing files
         var processingTasks = Enumerable.Range(0, Environment.ProcessorCount)
-                                        .Select(_ => ProcessFilesAsync(channel, sb))
+                                        .Select(_ => ProcessFilesUtf8Async(channel, writer))
                                         .ToArray();
 
-        await discoveryTask; // Wait for discovery to finish
-        channel.Writer.Complete(); // Signal that no more files will be written
+        await discoveryTask;
+        channel.Writer.Complete();
+        await Task.WhenAll(processingTasks);
 
-        await Task.WhenAll(processingTasks); // Wait for all processing to finish
-
-        await File.WriteAllTextAsync(outputFile, sb.ToString());
+        await writer.FlushAsync();
+        await File.WriteAllBytesAsync(outputFile, memoryStream.ToArray());
         Console.WriteLine($"Successfully compacted solution to {outputFile}");
+    }
+
+    private static async Task ProcessFilesUtf8Async(Channel<string> channel, StreamWriter writer)
+    {
+        await foreach ( var file in channel.Reader.ReadAllAsync() )
+        {
+            try
+            {
+                var directory = Path.GetDirectoryName(file);
+                if ( directory == null )
+                    continue;
+
+                var relativePath = Path.GetRelativePath(directory, file).Replace('\\', '/');
+                var content = CompactContent(file);
+
+                if ( string.IsNullOrWhiteSpace(content) )
+                    continue;
+
+                lock ( writer )
+                {
+                    writer.Write(FileDelimiter);
+                    writer.Write($"# {relativePath}");
+                    writer.Write(FileDelimiter);
+                    writer.Write(content);
+                }
+            }
+            catch ( Exception ex )
+            {
+                Console.WriteLine($"Warning: Failed to process file {file}: {ex.Message}");
+            }
+        }
     }
 
     private static bool DetectBlazorProject(string solutionPath)
     {
-        // Check for Blazor project indicators
-        var projectFiles = Directory.GetFiles(solutionPath, "*.csproj", SearchOption.AllDirectories);
-
-        foreach ( var projectFile in projectFiles )
+        try
         {
+            // Check for Blazor project indicators
+            var projectFiles = Directory.GetFiles(solutionPath, "*.csproj", SearchOption.AllDirectories);
+
+            foreach ( var projectFile in projectFiles )
+            {
+                try
+                {
+                    var content = File.ReadAllText(projectFile);
+                    if ( content.Contains("Microsoft.AspNetCore.Components") ||
+                         content.Contains("Microsoft.AspNetCore.Components.WebAssembly") ||
+                         content.Contains("Blazor") ||
+                         content.Contains("<Project Sdk=\"Microsoft.NET.Sdk.BlazorWebAssembly\">") ||
+                         content.Contains("<Project Sdk=\"Microsoft.NET.Sdk.Web\">") )
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // Ignore file read errors and continue checking
+                }
+            }
+
+            // Check for common Blazor files (safely)
+            var blazorIndicators = new[]
+            {
+                "*.razor"
+            };
+
+            foreach ( var pattern in blazorIndicators )
+            {
+                try
+                {
+                    if ( Directory.GetFiles(solutionPath, pattern, SearchOption.AllDirectories).Length > 0 )
+                        return true;
+                }
+                catch
+                {
+                    // Ignore directory access errors
+                }
+            }
+
+            // Check for specific Blazor files
+            var specificFiles = new[]
+            {
+                "_Imports.razor",
+                "App.razor",
+                "MainLayout.razor"
+            };
+
+            foreach ( var file in specificFiles )
+            {
+                try
+                {
+                    if ( Directory.GetFiles(solutionPath, file, SearchOption.AllDirectories).Length > 0 )
+                        return true;
+                }
+                catch
+                {
+                    // Ignore directory access errors
+                }
+            }
+
+            // Check if wwwroot directory exists before searching in it
             try
             {
-                var content = File.ReadAllText(projectFile);
-                if ( content.Contains("Microsoft.AspNetCore.Components") ||
-                     content.Contains("Microsoft.AspNetCore.Components.WebAssembly") ||
-                     content.Contains("Blazor") ||
-                     content.Contains("<Project Sdk=\"Microsoft.NET.Sdk.BlazorWebAssembly\">") ||
-                     content.Contains("<Project Sdk=\"Microsoft.NET.Sdk.Web\">") )
+                var wwwrootDirs = Directory.GetDirectories(solutionPath, "wwwroot", SearchOption.AllDirectories);
+                if ( wwwrootDirs.Length > 0 )
                 {
-                    return true;
+                    foreach ( var wwwrootDir in wwwrootDirs )
+                    {
+                        var indexPath = Path.Combine(wwwrootDir, "index.html");
+                        if ( File.Exists(indexPath) )
+                            return true;
+                    }
                 }
             }
             catch
             {
-                // Ignore file read errors and continue checking
+                // Ignore directory access errors
             }
+
+            return false;
         }
-
-        // Check for common Blazor files
-        var blazorIndicators = new[]
+        catch
         {
-            "_Imports.razor",
-            "App.razor",
-            "MainLayout.razor",
-            "wwwroot/index.html"
-        };
-
-        return blazorIndicators.Any(indicator =>
-            Directory.GetFiles(solutionPath, indicator, SearchOption.AllDirectories).Length > 0
-        );
+            // If any error occurs during detection, assume it's not a Blazor project
+            return false;
+        }
     }
 
     private static int DiscoverFiles(string directory, Channel<string> channel,
@@ -277,37 +364,6 @@ public static partial class SolutionCompactor
         );
     }
 
-    private static async Task ProcessFilesAsync(Channel<string> channel, StringBuilder sb)
-    {
-        await foreach ( var file in channel.Reader.ReadAllAsync() )
-        {
-            try
-            {
-                var directory = Path.GetDirectoryName(file);
-                if ( directory == null )
-                    continue;
-
-                var relativePath = Path.GetRelativePath(directory, file);
-                var content = CompactContent(file);
-
-                if ( string.IsNullOrWhiteSpace(content) )
-                    continue;
-
-                var outputLine = $"### {relativePath}\n{content}\n\n";
-
-                lock ( sb )
-                {
-                    sb.Append(outputLine);
-                    Console.WriteLine($"Processed {relativePath}");
-                }
-            }
-            catch ( Exception ex )
-            {
-                Console.WriteLine($"Warning: Failed to process file {file}: {ex.Message}");
-            }
-        }
-    }
-
     private static List<string> LoadGitignoreRules(string directory)
     {
         var gitignorePath = Path.Combine(directory, ".gitignore");
@@ -387,7 +443,6 @@ public static partial class SolutionCompactor
         var extension = Path.GetExtension(filePath).ToLowerInvariant();
         var content = File.ReadAllText(filePath);
 
-        // Remove comments based on file type
         content = extension switch
         {
             ".cs" => RemoveCStyleComments(content),
@@ -397,14 +452,15 @@ public static partial class SolutionCompactor
             _ => content
         };
 
-        var lines = content.Split(["\r\n", "\r", "\n"], StringSplitOptions.None)
-                           .Select(line => line.Trim())
-                           .Where(line => !string.IsNullOrWhiteSpace(line))
-                           .ToList();
+        var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                           .Select(l => l.Trim())
+                           .Where(l => !string.IsNullOrWhiteSpace(l))
+                           .ToArray();
 
-        var isXmlOrJson = lines.FirstOrDefault()?.TrimStart().StartsWith('<') == true ||
-                          lines.FirstOrDefault()?.TrimStart().StartsWith('{') == true;
-        return string.Join(isXmlOrJson ? "" : "\n", lines);
+        var first = lines.FirstOrDefault();
+        var joiner = first?.StartsWith('<') == true || first?.StartsWith('{') == true ? "" : " ";
+
+        return string.Join(joiner, lines);
     }
 
     private static string RemoveCStyleComments(string content)
@@ -475,11 +531,14 @@ public static partial class SolutionCompactor
             var endTime = DateTime.UtcNow;
 
             Console.WriteLine($"Elapsed time: {(endTime - startTime).TotalMilliseconds} ms.");
-            await Task.Delay(1000);
         }
         catch ( Exception ex )
         {
             Console.WriteLine($"Error: {ex.Message}");
+        }
+        finally
+        {
+            await Task.Delay(1500);
         }
     }
 
