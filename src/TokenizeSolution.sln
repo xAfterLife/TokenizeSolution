@@ -4,6 +4,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TokenizeSolution", "Tokeniz
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DirectoryLayout", "DirectoryLayout\DirectoryLayout.csproj", "{D0C6AFD7-9FE1-48CB-8484-4AA1CC6FDCE2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TokenizeSolution-V2-LLM", "TokenizeSolution-V2-LLM\TokenizeSolution-V2-LLM.csproj", "{C67FA59C-4C70-4931-BB00-20D8B5AA105D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -18,5 +20,9 @@ Global
 		{D0C6AFD7-9FE1-48CB-8484-4AA1CC6FDCE2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D0C6AFD7-9FE1-48CB-8484-4AA1CC6FDCE2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D0C6AFD7-9FE1-48CB-8484-4AA1CC6FDCE2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C67FA59C-4C70-4931-BB00-20D8B5AA105D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C67FA59C-4C70-4931-BB00-20D8B5AA105D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C67FA59C-4C70-4931-BB00-20D8B5AA105D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C67FA59C-4C70-4931-BB00-20D8B5AA105D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
